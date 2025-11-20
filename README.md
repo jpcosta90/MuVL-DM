@@ -14,7 +14,7 @@ The pipeline is built on the **Autoregressive Multimodal Pre-Training** paradigm
 
 CaVL-Doc focuses exclusively on enhancing the **representation quality** of the LVLM's output feature vector for document retrieval tasks.
 
-![Model Architecture](docs/assets/model_architecture.png)
+![Model Architecture](docs/assets/model_structure.png)
 
 The system utilizes a frozen, pre-trained LVLM (e.g., InternVL3) and fine-tunes it along two primary technical pathways, both leveraging **Contrastive Loss** for metric learning:
 
