@@ -1,57 +1,46 @@
 # src/models/siamese_internVL.py
-from typing import Any, Callable, Optional, Tuple, List
+from typing import Any, Callable, Optional, Tuple, List, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 # ----------------------
-# AttentionPooling + ProjectionHead (self-contained)
+# AttentionPooling + ProjectionHead (Mantidos do seu código original)
 # ----------------------
 class AttentionPooling(nn.Module):
     """
     Attention-based pooling that learns a global query vector and attends over token sequence.
     Input: tokens (B, seq_len, hidden_dim)
     Output: pooled (B, hidden_dim)
-    Uses nn.MultiheadAttention (batch_first=False requires seq-first).
     """
     def __init__(self, hidden_dim: int = 1536, num_heads: int = 8, dropout: float = 0.0):
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
-        # use batch_first=False API (seq_len, batch, embed)
-        # we'll transpose tokens accordingly
+        # batch_first=False API (seq_len, batch, embed)
         self.mha = nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=num_heads, dropout=dropout, batch_first=False)
         # learnable query token (1, hidden_dim)
-        self.query = nn.Parameter(torch.randn(1, hidden_dim) * 0.02)  # (1, hidden_dim)
+        self.query = nn.Parameter(torch.randn(1, hidden_dim) * 0.02)
         self.ln = nn.LayerNorm(hidden_dim, eps=1e-6)
 
     def forward(self, tokens: torch.Tensor, mask: Optional[torch.Tensor] = None):
-        """
-        tokens: (B, seq_len, hidden_dim)
-        mask: optional bool tensor (B, seq_len) with True for valid tokens OR None
-        returns: (B, hidden_dim)
-        """
         if tokens is None:
             raise ValueError("tokens must be provided to AttentionPooling")
 
         b, seq_len, d = tokens.shape
 
-        # --- Ensure dtype consistency between tokens and pool params (query / mha weights) ---
-        # Use the dtype of the learnable query as canonical dtype for MHA ops
+        # Ensure dtype consistency
         target_dtype = self.query.dtype
         if tokens.dtype != target_dtype:
             tokens = tokens.to(dtype=target_dtype)
 
         tokens_t = tokens.transpose(0, 1)  # (seq_len, B, d)
-
         q = self.query.unsqueeze(1).expand(1, b, d)  # (1, B, d)
-        # q already has the correct dtype (self.query.dtype)
 
         if mask is not None:
-            # expected key_padding_mask: (B, seq_len) with True in positions that should be masked
             if mask.dtype == torch.bool:
-                key_padding_mask = ~mask  # True = masked
+                key_padding_mask = ~mask
             else:
                 key_padding_mask = ~(mask.bool())
         else:
@@ -65,9 +54,7 @@ class AttentionPooling(nn.Module):
 
 class ProjectionHead(nn.Module):
     """
-    Projection MLP head (bigger): input_dim -> proj_hidden -> proj_out
-    Includes LayerNorm on input and final L2 normalization.
-    Default: proj_hidden=4096, proj_out=512
+    Projection MLP head: input_dim -> proj_hidden -> proj_out
     """
     def __init__(self, input_dim: int = 1536, proj_hidden: int = 4096, proj_out: int = 512, use_norm: bool = True):
         super().__init__()
@@ -79,16 +66,10 @@ class ProjectionHead(nn.Module):
 
         nn.init.normal_(self.fc1.weight, std=0.02)
         nn.init.normal_(self.fc2.weight, std=0.02)
-        if self.fc1.bias is not None:
-            nn.init.zeros_(self.fc1.bias)
-        if self.fc2.bias is not None:
-            nn.init.zeros_(self.fc2.bias)
+        if self.fc1.bias is not None: nn.init.zeros_(self.fc1.bias)
+        if self.fc2.bias is not None: nn.init.zeros_(self.fc2.bias)
 
     def forward(self, x: torch.Tensor):
-        """
-        x: (B, input_dim)
-        returns: (B, proj_out) L2-normalized (if use_norm)
-        """
         x = self.ln(x)
         x = self.fc1(x)
         x = self.act(x)
@@ -97,107 +78,184 @@ class ProjectionHead(nn.Module):
             x = F.normalize(x, p=2, dim=-1)
         return x
 
+
 # ----------------------
-# Siamese wrapper
+# Siamese wrapper (Atualizado para ser Self-Contained)
 # ----------------------
 class SiameseInternVL(nn.Module):
     """
-    Wrapper for InternVLChatModel to produce siamese embeddings using hidden states at `cut_layer`.
-    - Replaces lm_head and final norm by nn.Identity() when possible
-    - encode_fn(backbone, images, cut_layer) is recommended: returns (tokens, mask)
-    - set_default_trainable() unfreezes typical layer-N parameters (layer == cut_layer)
+    Wrapper autônomo para InternVLChatModel.
+    Gerencia tokenização interna, extração na cut_layer, pooling e projeção.
     """
     def __init__(self,
                  backbone: Any,
+                 tokenizer: Any,
                  cut_layer: int = 27,
+                 prompt: str = "<image> Analyze this document",
+                 # Head configs (se não passar head pronto)
+                 head: Optional[nn.Module] = None,
                  hidden_dim: int = 1536,
                  proj_hidden: int = 4096,
                  proj_out: int = 512,
-                 num_pool_heads: int = 8,
-                 encode_fn: Optional[Callable] = None):
+                 num_pool_heads: int = 8):
         super().__init__()
         self.backbone = backbone
+
+        # --- CORREÇÃO DOS WARNINGS AQUI ---
+        
+        # 1. Resolve o warning "use_reentrant parameter should be passed explicitly"
+        # Forçamos a configuração correta no backbone
+        if hasattr(self.backbone, "gradient_checkpointing_enable"):
+            self.backbone.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+
+        # 2. Resolve o warning "None of the inputs have requires_grad=True"
+        # Quando usamos checkpointing em modelo congelado, a entrada PRECISA ter gradiente
+        # senão o checkpointing quebra a cadeia. Essa função do HF faz isso automaticamente.
+        if hasattr(self.backbone, "enable_input_require_grads"):
+            self.backbone.enable_input_require_grads()
+        else:
+            # Fallback manual caso o backbone não tenha o método (raro em HF modernos)
+            def make_inputs_require_grad(module, input, output):
+                output.requires_grad_(True)
+            self.backbone.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+        # ----------------------------------
+        
+        self.tokenizer = tokenizer
         self.cut_layer = cut_layer
-        self.encode_fn = encode_fn
+        self.prompt = prompt
         self.hidden_dim = hidden_dim
 
-        # neutralize NTP-specific modules if present (safe guard)
+        # 1. Limpeza do Backbone (remover cabeças de LM originais para economizar memória/evitar bugs)
         try:
-            # many ChatModel wrappers have language_model.lm_head
             if hasattr(self.backbone.language_model, "lm_head"):
                 self.backbone.language_model.lm_head = nn.Identity()
-        except Exception:
-            pass
-        try:
-            # some models have language_model.model.norm
             if hasattr(self.backbone.language_model.model, "norm"):
                 self.backbone.language_model.model.norm = nn.Identity()
         except Exception:
             pass
 
-        # new pooling + head
+        # 2. Componentes de Pooling e Head
         self.pool = AttentionPooling(hidden_dim, num_heads=num_pool_heads)
-        self.head = ProjectionHead(input_dim=hidden_dim, proj_hidden=proj_hidden, proj_out=proj_out)
+        
+        if head is not None:
+            self.head = head
+        else:
+            self.head = ProjectionHead(input_dim=hidden_dim, proj_hidden=proj_hidden, proj_out=proj_out)
 
-        # freeze backbone by default
+        # 3. Congelar backbone por padrão
         self.freeze_all_backbone()
 
-    # --- param control ---
+    # --- Internal Input Prep (A mágica da compatibilidade) ---
+    def _prepare_inputs(self, pixel_values: torch.Tensor):
+        """
+        Gera input_ids e attention_mask a partir do prompt armazenado e anexa as imagens.
+        """
+        device = pixel_values.device
+        batch_size = pixel_values.shape[0]
+        
+        # Tokenização do prompt fixo
+        text_inputs = self.tokenizer(
+            [self.prompt] * batch_size,
+            return_tensors='pt',
+            padding=True,
+            max_length=80, # Margem de segurança
+            truncation=True
+        ).to(device)
+
+        return {
+            'input_ids': text_inputs.input_ids,
+            'attention_mask': text_inputs.attention_mask,
+            # Força bfloat16 se o backbone for bf16 (comum em InternVL)
+            'pixel_values': pixel_values.to(dtype=torch.bfloat16), 
+            'image_flags': torch.ones(batch_size, 1).to(device)
+        }
+
+    # --- Forward Single (Imagem -> Embedding) ---
+    def forward_single(self, images: torch.Tensor):
+        """
+        Processa um batch de imagens e retorna embeddings normalizados.
+        images: (B, 3, H, W)
+        """
+        inputs = self._prepare_inputs(images)
+        
+        # Passa pelo Backbone
+        outputs = self.backbone(
+            input_ids=inputs['input_ids'],
+            attention_mask=inputs['attention_mask'],
+            pixel_values=inputs['pixel_values'],
+            image_flags=inputs['image_flags'],
+            output_hidden_states=True,
+            return_dict=True
+        )
+        
+        # Seleção da camada (Cut Layer)
+        hidden_states = outputs.hidden_states
+        # Ajuste de índice: hidden_states geralmente tem (embeddings + layers)
+        # Se len for 33 (embed + 32 layers), e queremos a layer 27 (index 28)
+        target_idx = self.cut_layer + 1 if len(hidden_states) > self.cut_layer + 1 else self.cut_layer
+        
+        tokens = hidden_states[target_idx] # (B, Seq_Len, Hidden_Dim)
+        
+        # Pooling e Projeção
+        pooled = self.pool(tokens) # (B, Hidden_Dim)
+        z = self.head(pooled)      # (B, Proj_Out)
+        
+        return z
+
+    # --- Forward Flexível (Treino ou Inferência) ---
+    def forward(self, 
+                images: Optional[torch.Tensor] = None, 
+                image_a: Optional[torch.Tensor] = None, 
+                image_b: Optional[torch.Tensor] = None):
+        """
+        Modos:
+        1. image_a + image_b -> Retorna (emb_a, emb_b) para treino siamês.
+        2. images -> Retorna emb para inferência.
+        """
+        if image_a is not None and image_b is not None:
+            emb_a = self.forward_single(image_a)
+            emb_b = self.forward_single(image_b)
+            return emb_a, emb_b
+        
+        if images is not None:
+            return self.forward_single(images)
+            
+        raise ValueError("Forneça 'images' (inferência) ou o par 'image_a' e 'image_b' (treino).")
+
+    # --- Utilitários de Treinamento (Mantidos para compatibilidade com Trainer) ---
     def freeze_all_backbone(self):
         for p in self.backbone.parameters():
             p.requires_grad = False
 
     def unfreeze_params_by_substrings(self, substrings: List[str]):
-        """
-        Unfreeze any parameter whose name contains one of the substrings.
-        Skip non-floating-point tensors (and log them).
-        """
         skipped = []
         unfrozen = []
         for name, p in self.backbone.named_parameters():
             for s in substrings:
                 if s in name:
-                    # only allow floating-point tensors to require gradients
                     if not getattr(p, "dtype", None) or not p.dtype.is_floating_point:
                         skipped.append((name, str(p.dtype)))
                         break
                     p.requires_grad = True
                     unfrozen.append(name)
                     break
-
         if skipped:
-            print("[WARN] Some parameters matched the requested substrings but were NOT unfrozen because they are not floating-point tensors:")
-            for n, dt in skipped:
-                print(f"  - {n} (dtype={dt})")
+            print(f"[WARN] Skipped non-float params: {len(skipped)}")
         if unfrozen:
-            print(f"[INFO] Unfroze {len(unfrozen)} parameter tensors (examples): {unfrozen[:8]}")
+            print(f"[INFO] Unfroze {len(unfrozen)} params in backbone.")
 
     def set_default_trainable(self):
-        """
-        Default: freeze all backbone then unfreeze typical submodules in cut_layer
-        (q_proj, k_proj, v_proj, o_proj, mlp projections, layernorms).
-        """
         self.freeze_all_backbone()
         cut = self.cut_layer
+        # Unfreeze typical LoRA/Adapter targets or Full Finetuning targets at cut_layer
         keys = [
-            f"language_model.model.layers.{cut}.self_attn.q_proj",
-            f"language_model.model.layers.{cut}.self_attn.k_proj",
-            f"language_model.model.layers.{cut}.self_attn.v_proj",
-            f"language_model.model.layers.{cut}.self_attn.o_proj",
-            f"language_model.model.layers.{cut}.mlp.gate_proj",
-            f"language_model.model.layers.{cut}.mlp.up_proj",
-            f"language_model.model.layers.{cut}.mlp.down_proj",
-            f"language_model.model.layers.{cut}.input_layernorm",
-            f"language_model.model.layers.{cut}.post_attention_layernorm",
+            f"layers.{cut}.self_attn",
+            f"layers.{cut}.mlp",
+            f"layers.{cut}.input_layernorm",
+            f"layers.{cut}.post_attention_layernorm",
         ]
         self.unfreeze_params_by_substrings(keys)
-
-    def list_trainable(self, prefix: str = ""):
-        items = []
-        for n, p in self.named_parameters():
-            if p.requires_grad and (prefix == "" or prefix in n):
-                items.append((n, tuple(p.shape)))
-        return items
 
     def trainable_summary(self):
         total = 0
@@ -208,110 +266,44 @@ class SiameseInternVL(nn.Module):
             total += nparams
             if p.requires_grad:
                 trainable += nparams
-                print(f"  {n:90s} | TRAINABLE | shape={tuple(p.shape)}")
         pct = 100.0 * trainable / total if total > 0 else 0.0
         print(f"Total params: {total:,} | Trainable: {trainable:,} ({pct:.2f}%)")
         return total, trainable
 
-    # --- token extraction ---
-    def _extract_tokens_via_encode_fn(self, images: torch.Tensor, device: Optional[torch.device] = None,
-                                      **encode_kwargs) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        assert callable(self.encode_fn), "encode_fn not provided."
-        out = self.encode_fn(self.backbone, images, cut_layer=self.cut_layer, **(encode_kwargs or {}))
-        if isinstance(out, tuple):
-            tokens, mask = out
-        else:
-            tokens, mask = out, None
-        return tokens, mask
-
-    def _extract_tokens_via_hidden_states(self, input_ids: Optional[torch.Tensor] = None,
-                                          attention_mask: Optional[torch.Tensor] = None,
-                                          device: Optional[torch.device] = None,
-                                          **kwargs) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        lm = self.backbone.language_model.model
-        call_args = dict(output_hidden_states=True, return_dict=True)
-        if input_ids is not None:
-            call_args['input_ids'] = input_ids.to(next(self.parameters()).device)
-        if attention_mask is not None:
-            call_args['attention_mask'] = attention_mask.to(next(self.parameters()).device)
-        call_args.update(kwargs)
-        out = lm(**call_args)
-        hidden_states = out.hidden_states
-        # hidden_states length may have +1 due to embeddings; adjust index accordingly
-        if len(hidden_states) == (len(lm.layers) + 1):
-            idx = self.cut_layer + 1
-        else:
-            idx = self.cut_layer
-        tokens = hidden_states[idx]
-        return tokens, None
-
-    # --- forward ---
-    def forward(self,
-                images: Optional[torch.Tensor] = None,
-                input_ids: Optional[torch.Tensor] = None,
-                attention_mask: Optional[torch.Tensor] = None,
-                device: Optional[torch.device] = None,
-                encode_kwargs: Optional[dict] = None) -> torch.Tensor:
-        """
-        Forward returns projected embedding z for given input.
-        Preferred mode: provide `images` and `encode_fn` (the dataset uses per-document patch tensors).
-        Alternative: provide input_ids + attention_mask and let the LM produce hidden states.
-        """
-        device = device or (next(self.parameters()).device)
-        if self.encode_fn is not None and images is not None:
-            tokens, mask = self._extract_tokens_via_encode_fn(images.to(device), device=device, **(encode_kwargs or {}))
-        else:
-            tokens, mask = self._extract_tokens_via_hidden_states(input_ids=input_ids,
-                                                                  attention_mask=attention_mask,
-                                                                  device=device,
-                                                                  **(encode_kwargs or {}))
-        # tokens: (batch, seq_len, hidden_dim) OR (1, seq_len, hidden_dim)
-        pooled = self.pool(tokens, mask=mask)
-        z = self.head(pooled)
-        return z
-
-    # convenience
-    def save_head(self, path: str):
-        sd = {'pool': self.pool.state_dict(), 'head': self.head.state_dict()}
-        torch.save(sd, path)
-
-    def load_head(self, path: str, map_location=None):
-        sd = torch.load(path, map_location=map_location)
-        self.pool.load_state_dict(sd['pool'])
-        self.head.load_state_dict(sd['head'])
-
-
 # ----------------------
-# factory
+# Factory (Atualizada)
 # ----------------------
 def build_siamese_internvl(
         backbone: Any,
+        tokenizer: Any, # <--- Novo argumento obrigatório
         cut_layer: int = 27,
-        encode_fn: Optional[Callable] = None,
         hidden_dim: int = 1536,
         proj_hidden: int = 4096,
         proj_out: int = 512,
         num_pool_heads: int = 8,
-        pool_dim: Optional[int] = None,    # <-- compat alias
-        set_trainable: bool = True
+        prompt: str = "<image> Analyze this document",
+        head: Optional[nn.Module] = None,
+        set_trainable: bool = True,
+        **kwargs # Captura args legados como encode_fn e pool_dim
 ) -> SiameseInternVL:
-    """
-    Create SiameseInternVL configured with AttentionPooling + ProjectionHead.
-    Backwards-compatible: accepts pool_dim (old name) as alias for hidden_dim.
-    """
-    if pool_dim is not None:
-        hidden_dim = pool_dim
+    
+    # Compatibilidade com chamadas antigas que usavam 'pool_dim'
+    if 'pool_dim' in kwargs and kwargs['pool_dim'] is not None:
+        hidden_dim = kwargs['pool_dim']
 
     siam = SiameseInternVL(
         backbone=backbone,
+        tokenizer=tokenizer,
         cut_layer=cut_layer,
         hidden_dim=hidden_dim,
         proj_hidden=proj_hidden,
         proj_out=proj_out,
         num_pool_heads=num_pool_heads,
-        encode_fn=encode_fn
+        prompt=prompt,
+        head=head
     )
+    
     if set_trainable:
         siam.set_default_trainable()
+        
     return siam
-

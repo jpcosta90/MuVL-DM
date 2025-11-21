@@ -31,6 +31,27 @@ If you want to load the model in 4-bit quantized mode, pass --load-in-4bit.
 """
 
 import os
+import warnings
+
+# --- INÍCIO DO BLOCO "SILENCIADOR NUCLEAR" ---
+# Intercepta e mata warnings específicos que ignoram filtros padrão
+def _custom_warn(message, category=None, stacklevel=1, source=None):
+    msg_str = str(message)
+    # Lista de strings parciais para bloquear
+    block_list = [
+        "use_reentrant parameter should be passed explicitly",
+        "None of the inputs have requires_grad=True",
+        "torch.utils.checkpoint"
+    ]
+    if any(s in msg_str for s in block_list):
+        return
+    # Se não for um dos bloqueados, chama o original
+    _original_warn(message, category, stacklevel, source)
+
+# Salva o original e substitui
+_original_warn = warnings.warn
+warnings.warn = _custom_warn
+# --- FIM DO BLOCO ---
 # avoid tokenizers parallelism fork warnings
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
