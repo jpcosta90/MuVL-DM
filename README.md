@@ -143,15 +143,15 @@ python scripts/run_evaluation.py \
 
 ### LA-CDIP Results
 
-| Method                   |   EER (%) | Model/Adapter   | Metric    | Link Figura                                                |
-|:-------------------------|----------:|:----------------|:----------|:-----------------------------------------------------------|
-| pixel_cosine_baseline    |      9.07 | N/A             | cosine    | [Link](results/plots/LA-CDIP_pixel_cosine_baseline.png)    |
+| Method                |   EER (%) | Model/Adapter   | Metric   | Link Figura                                             |
+|:----------------------|----------:|:----------------|:---------|:--------------------------------------------------------|
+| pixel_cosine_baseline |      9.07 | N/A             | cosine   | [Link](results/plots/LA-CDIP_pixel_cosine_baseline.png) |
 
 ### RVL-CDIP Results
 
-| Method                   |   EER (%) | Model/Adapter   | Metric    | Link Figura                                                 |
-|:-------------------------|----------:|:----------------|:----------|:------------------------------------------------------------|
-| pixel_cosine_baseline    |      36.3 | N/A             | cosine    | [Link](results/plots/RVL-CDIP_pixel_cosine_baseline.png)    |
+| Method                |   EER (%) | Model/Adapter   | Metric   | Link Figura                                              |
+|:----------------------|----------:|:----------------|:---------|:---------------------------------------------------------|
+| pixel_cosine_baseline |      36.3 | N/A             | cosine   | [Link](results/plots/RVL-CDIP_pixel_cosine_baseline.png) |
 
 ### Performance vs. Parameters (LA-CDIP Dataset)
 
