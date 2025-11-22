@@ -98,7 +98,7 @@ def load_trained_siamese(checkpoint_path, base_model, tokenizer, device, default
 
     # --- 4. Instancia ---
     siam = CaVLModel(
-        backbone=base_model,
+        base_model,
         cut_layer=cut_layer,
         hidden_dim=hidden_dim,
         proj_hidden=proj_hidden, 

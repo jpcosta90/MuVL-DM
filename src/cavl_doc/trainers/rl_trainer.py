@@ -22,7 +22,7 @@ from cavl_doc.modules.losses import ContrastiveLoss
 from cavl_doc.utils.embedding_utils import prepare_inputs_for_multimodal_embedding
 
 # siam builder
-from cavl_doc.models.modeling_cavl import build_siamese_cavl
+from cavl_doc.models.modeling_cavl import build_cavl_model
 
 logger = logging.getLogger(__name__)
 EMBEDDING_PROMPT = "<image> Analyze this document"
@@ -155,7 +155,7 @@ def run_rl_siamese_loop(
         return hidden_states[idx], None
 
     # Build wrapper
-    siam = build_siamese_cavl(
+    siam = build_cavl_model(
         backbone=base_model, 
         cut_layer=cut_layer, 
         encode_fn=_encode_fn,
