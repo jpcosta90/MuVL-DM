@@ -63,13 +63,13 @@ from pathlib import Path
 import torch
 
 # Project imports (adjust if your modules have different names)
-from cavl_doc.data_loaders.documentpairs import DocumentPairDataset
-from cavl_doc.models.lvlm_handler import load_model, warm_up_model
+from cavl_doc.data.dataset import DocumentPairDataset
+from cavl_doc.models.backbone_loader import load_model, warm_up_model
 from cavl_doc.utils.helpers import setup_experiment_dir
-from cavl_doc.models.heads import ProjectionHead
-from cavl_doc.models.professor import ProfessorNetwork
+from cavl_doc.modules.heads import ProjectionHead
+from cavl_doc.models.policy import ProfessorNetwork
 # Trainer
-from cavl_doc.finetuning.rl_siamese_trainer import run_rl_siamese_loop
+from cavl_doc.trainers.rl_trainer import run_rl_siamese_loop
 
 
 def prepare_experiment(args):
@@ -125,7 +125,7 @@ def main(args):
 
     # default hidden dims — match your trainer expectation or pass via args if different
     LLM_HIDDEN_DIM = 1536
-    student_head = ProjectionHead(input_dim=LLM_HIDDEN_DIM, output_dim=args.projection_output_dim).to(device)
+    student_head = ProjectionHead(input_dim=LLM_HIDDEN_DIM, proj_out=args.projection_output_dim).to(device)
     student_head.train()
     print("Student (ProjectionHead) ready.")
     

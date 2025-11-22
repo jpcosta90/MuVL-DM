@@ -16,14 +16,13 @@ from torch.distributions import Categorical
 from torch.utils.data import DataLoader, Subset
 
 # Project imports
-from cavl_doc.models.professor import ProfessorNetwork
-from cavl_doc.finetuning.losses import ContrastiveLoss
+from cavl_doc.modules.losses import ContrastiveLoss
 
 # prepare_inputs_for_multimodal_embedding may be in different modules
 from cavl_doc.utils.embedding_utils import prepare_inputs_for_multimodal_embedding
 
 # siam builder
-from cavl_doc.models.siamese_internVL import build_siamese_internvl
+from cavl_doc.models.modeling_cavl import build_siamese_cavl
 
 logger = logging.getLogger(__name__)
 EMBEDDING_PROMPT = "<image> Analyze this document"
@@ -156,7 +155,7 @@ def run_rl_siamese_loop(
         return hidden_states[idx], None
 
     # Build wrapper
-    siam = build_siamese_internvl(
+    siam = build_siamese_cavl(
         backbone=base_model, 
         cut_layer=cut_layer, 
         encode_fn=_encode_fn,

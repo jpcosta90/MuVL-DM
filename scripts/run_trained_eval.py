@@ -20,9 +20,9 @@ from sklearn.metrics import roc_curve
 import pandas as pd
 
 # Project imports
-from cavl_doc.models.lvlm_handler import load_model, warm_up_model
-from cavl_doc.models.siamese_internVL import SiameseInternVL, ProjectionHead
-from cavl_doc.data_loaders.documentpairs import DocumentPairDataset
+from cavl_doc.models.backbone_loader import load_model, warm_up_model
+from cavl_doc.models.modeling_cavl import CaVLModel
+from cavl_doc.data.dataset import DocumentPairDataset
 from cavl_doc.utils.visualization import plot_density
 
 # Tenta importar a função de encode
@@ -97,7 +97,7 @@ def load_trained_siamese(checkpoint_path, base_model, tokenizer, device, default
         return hidden_states[idx], None
 
     # --- 4. Instancia ---
-    siam = SiameseInternVL(
+    siam = CaVLModel(
         backbone=base_model,
         cut_layer=cut_layer,
         hidden_dim=hidden_dim,

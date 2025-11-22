@@ -6,15 +6,12 @@ import os
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer, BitsAndBytesConfig
 import torch.nn as nn
 from peft import PeftModel
-from cavl_doc.models.misc import NewConnector # Ou onde quer que NewConnector esteja definida
-from cavl_doc.models.heads import ProjectionHead
+from cavl_doc.utils.misc import NewConnector # Ou onde quer que NewConnector esteja definida
+from cavl_doc.modules.heads import mpProjectionHead
 import glob
 
 import logging
 from typing import Tuple, Optional # Importar Optional para tipos mais claros
-
-# Importar o ProjectionHead
-from cavl_doc.models.heads import ProjectionHead
 
 def _get_quantization_config() -> BitsAndBytesConfig:
     """Retorna a configuração padrão de quantização BitsAndBytes."""
@@ -177,7 +174,7 @@ def load_model(
                 new_connector_loaded = new_connector_loaded.to(final_model.device).to(model_dtype).eval()
                 print("    -> Camada NewConnector (Antiga) carregada com sucesso.")
             if 'projection_head_state_dict' in checkpoint:
-                projection_head_loaded = ProjectionHead(input_dim=LLM_INPUT_DIM, output_dim=projection_output_dim)
+                projection_head_loaded = mpProjectionHead(input_dim=LLM_INPUT_DIM, output_dim=projection_output_dim)
                 projection_head_loaded.load_state_dict(checkpoint['projection_head_state_dict'])
                 projection_head_loaded = projection_head_loaded.to(final_model.device).to(model_dtype).eval()
                 print("    -> Camada ProjectionHead (Antiga) carregada com sucesso.")

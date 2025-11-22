@@ -3,9 +3,7 @@ import torchvision.transforms as T
 from torchvision.transforms.functional import InterpolationMode
 import matplotlib.pyplot as plt
 import torch
-import json
 from PIL import Image
-from transformers import AutoTokenizer
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD  = (0.229, 0.224, 0.225)
@@ -83,12 +81,6 @@ def load_image(image_file, input_size=448, max_num=12, use_thumbnail=True):
     )
     pixel_values = [transform(img) for img in images]
     return torch.stack(pixel_values).to(torch.bfloat16).cuda()
-
-import matplotlib.pyplot as plt
-import torch
-import json
-from PIL import Image
-from transformers import AutoTokenizer
 
 # Função para carregar e exibir imagens
 def show_pair(reference_image_path, image_path):

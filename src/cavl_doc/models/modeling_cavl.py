@@ -1,64 +1,17 @@
 # src/models/siamese_internVL.py
-from typing import Any, Callable, Optional, Tuple, List
+from typing import Any, Callable, Optional, List
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
+from cavl_doc.modules.heads import ProjectionHead
+from cavl_doc.modules.poolers import AttentionPooling
 # ----------------------
 # AttentionPooling + ProjectionHead (Mantidos idênticos)
 # ----------------------
-class AttentionPooling(nn.Module):
-    def __init__(self, hidden_dim: int = 1536, num_heads: int = 8, dropout: float = 0.0):
-        super().__init__()
-        assert hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
-        self.hidden_dim = hidden_dim
-        self.num_heads = num_heads
-        self.mha = nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=num_heads, dropout=dropout, batch_first=False)
-        self.query = nn.Parameter(torch.randn(1, hidden_dim) * 0.02)
-        self.ln = nn.LayerNorm(hidden_dim, eps=1e-6)
-
-    def forward(self, tokens: torch.Tensor, mask: Optional[torch.Tensor] = None):
-        if tokens is None:
-            raise ValueError("tokens must be provided to AttentionPooling")
-        b, seq_len, d = tokens.shape
-        target_dtype = self.query.dtype
-        if tokens.dtype != target_dtype:
-            tokens = tokens.to(dtype=target_dtype)
-        tokens_t = tokens.transpose(0, 1)
-        q = self.query.unsqueeze(1).expand(1, b, d)
-        if mask is not None:
-            key_padding_mask = ~mask if mask.dtype == torch.bool else ~(mask.bool())
-        else:
-            key_padding_mask = None
-        attn_out, _ = self.mha(q, tokens_t, tokens_t, key_padding_mask=key_padding_mask)
-        return self.ln(attn_out.squeeze(0))
-
-class ProjectionHead(nn.Module):
-    def __init__(self, input_dim: int = 1536, proj_hidden: int = 4096, proj_out: int = 512, use_norm: bool = True):
-        super().__init__()
-        self.ln = nn.LayerNorm(input_dim, eps=1e-6)
-        self.fc1 = nn.Linear(input_dim, proj_hidden, bias=True)
-        self.act = nn.GELU()
-        self.fc2 = nn.Linear(proj_hidden, proj_out, bias=True)
-        self.use_norm = use_norm
-        nn.init.normal_(self.fc1.weight, std=0.02)
-        nn.init.normal_(self.fc2.weight, std=0.02)
-        if self.fc1.bias is not None: nn.init.zeros_(self.fc1.bias)
-        if self.fc2.bias is not None: nn.init.zeros_(self.fc2.bias)
-
-    def forward(self, x: torch.Tensor):
-        x = self.ln(x)
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.fc2(x)
-        if self.use_norm:
-            x = F.normalize(x, p=2, dim=-1)
-        return x
-
 # ----------------------
 # Siamese wrapper (Ajustado: Warnings + Loader Inteligente)
 # ----------------------
-class SiameseInternVL(nn.Module):
+class CaVLModel(nn.Module):
     def __init__(self,
                  backbone: Any,
                  cut_layer: int = 27,
@@ -216,7 +169,7 @@ class SiameseInternVL(nn.Module):
 # ----------------------
 # Factory (Mantida compatível)
 # ----------------------
-def build_siamese_internvl(
+def build_siamese_cavl(
         backbone: Any,
         cut_layer: int = 27,
         encode_fn: Optional[Callable] = None,
@@ -227,10 +180,10 @@ def build_siamese_internvl(
         pool_dim: Optional[int] = None,
         set_trainable: bool = True,
         **kwargs # Ignora args extras como tokenizer se não usados
-) -> SiameseInternVL:
+) -> CaVLModel:
     if pool_dim is not None: hidden_dim = pool_dim
 
-    siam = SiameseInternVL(
+    siam = CaVLModel(
         backbone=backbone,
         cut_layer=cut_layer,
         hidden_dim=hidden_dim,
